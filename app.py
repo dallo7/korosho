@@ -389,7 +389,7 @@ def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status):
     ]
 
 
-def create_invoice_modal_layout(ref, date, coop_name, total_tsh, commission_usd):
+def create_payment_invoice_modal_layout(ref, date, coop_name, total_tsh, commission_usd):
     """Creates the Dash layout for the payment invoice modal."""
     return [
         dbc.ModalHeader(f"Download invoice: {ref}"),
@@ -407,7 +407,6 @@ def create_invoice_modal_layout(ref, date, coop_name, total_tsh, commission_usd)
             dbc.Button("Download invoice (PDF)", id="download-pdf-button", color="primary")
         ])
     ]
-
 
 # Utility & DB Functions
 
@@ -2389,16 +2388,20 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
 
         # --- Logic for Commission invoice ---
         if col_id == 'Commission invoice':
-            # We assume a invoice is "unpaid" until paid, or you can fetch its actual status
             commission_status = row_data.get('payment_commission_status',
-                                             'unpaid').lower()  # Assuming a new column for status
-            modal_content = create_invoice_modal_layout(
+                                             'unpaid').lower()
+
+            # --- THIS IS THE FIX ---
+            # Call the new function name
+            modal_content = create_payment_invoice_modal_layout(
                 ref=row_data.get('payment_commission_reference', 'N/A'),
                 date=row_data['Date Processed'],
                 coop_name=row_data['Cooperative'],
                 total_tsh=row_data.get('total_amount_raw', 0),
                 commission_usd=row_data.get('payment_commission_usd_raw', 0)
             )
+            # --- END OF FIX ---
+
             download_data = {
                 'type': 'payment_invoice',
                 'ref': row_data.get('payment_commission_reference', 'N/A'),
@@ -2406,11 +2409,11 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 'coop_name': row_data['Cooperative'],
                 'total_tsh': row_data.get('total_amount_raw', 0),
                 'commission_usd': row_data.get('payment_commission_usd_raw', 0),
-                'status': commission_status  # Pass the status
+                'status': commission_status
             }
             return True, modal_content, download_data
 
-        # --- Logic for Service Invoice ---
+        # --- Logic for Service Invoice (this part was already correct) ---
         if col_id == 'Service Invoice':
             modal_content = create_invoice_modal_layout(
                 ref=row_data.get('invoice_reference', 'N/A'),
