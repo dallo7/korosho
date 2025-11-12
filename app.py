@@ -152,10 +152,10 @@ class PDF(FPDF):
         self.set_text_color(0, 0, 0)
         self.cell(100, 7, self.coop_name, 0, 1, 'L')
 
-        # --- Column 2: RECEIPT DETAILS (Right-Aligned) ---
+        # --- Column 2: invoice DETAILS (Right-Aligned) ---
         self.set_y(current_y)
 
-        # --- Row 1: Receipt # ---
+        # --- Row 1: invoice # ---
         self.set_x(130)
         self.set_font('Arial', '', 9)
         self.set_text_color(119, 119, 119)
@@ -185,20 +185,24 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     pdf.add_page()
     pdf.add_bill_to_section()
 
+    # --- UPDATED TABLE HEADERS ---
     pdf.set_font('Arial', 'B', 9)
     pdf.set_fill_color(244, 244, 244)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(120, 8, 'Description', 1, 0, 'L', fill=True)
-    pdf.cell(20, 8, 'Quantity', 1, 0, 'R', fill=True)
-    pdf.cell(25, 8, 'Unit Price', 1, 0, 'R', fill=True)
-    pdf.cell(25, 8, 'Total', 1, 1, 'R', fill=True)
+    pdf.cell(100, 8, 'Description', 1, 0, 'L', fill=True)
+    pdf.cell(50, 8, 'Calculation', 1, 0, 'R', fill=True)
+    pdf.cell(40, 8, 'Amount (USD)', 1, 1, 'R', fill=True)
+    # --- END HEADER UPDATE ---
 
+    # --- UPDATED TABLE ROW WITH CALCULATION ---
     pdf.set_font('Arial', '', 10)
-    pdf.cell(120, 10, 'Bank Account Verification Service', 1, 0, 'L')
-    pdf.cell(20, 10, f'{rows:,}', 1, 0, 'R')
-    pdf.cell(25, 10, f'${COST_PER_ROW_USD:,.2f}', 1, 0, 'R')
-    pdf.set_font('Arial', 'B', 10)
-    pdf.cell(25, 10, f'${amount:,.2f}', 1, 1, 'R')
+    pdf.cell(100, 10, 'Bank Account Verification Service', 1, 0, 'L')
+    pdf.set_font('Arial', '', 9)  # Use a slightly smaller font for the calculation
+    pdf.cell(50, 10, f'{rows:,} rows @ ${COST_PER_ROW_USD:,.2f} / row', 1, 0, 'R')
+    pdf.set_font('Arial', 'B', 10)  # Bold for the total
+    pdf.cell(40, 10, f'${amount:,.2f}', 1, 1, 'R')
+    # --- END ROW UPDATE ---
+
     pdf.ln(10)
 
     current_y = pdf.get_y()
@@ -217,7 +221,7 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     pdf.set_x(120)
     pdf.set_font('Arial', '', 14)
     pdf.set_text_color(85, 85, 85)
-    pdf.cell(45, 10, 'AMOUNT PAYABLE', 0, 0, 'R')  # Changed from 'TOTAL DUE'
+    pdf.cell(45, 10, 'AMOUNT PAYABLE', 0, 0, 'R')
     pdf.set_font('Arial', 'B', 16)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(35, 10, f'${amount:,.2f}', 0, 1, 'R')
@@ -225,11 +229,9 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     pdf.set_draw_color(170, 170, 170)
     pdf.line(120, pdf.get_y(), 200, pdf.get_y())
 
-    # --- PAYMENT INSTRUCTIONS BLOCK ---
-    pdf.set_y(pdf.get_y() + 15)  # Move down from the total
+    pdf.set_y(pdf.get_y() + 15)
     current_y = pdf.get_y()
 
-    # Column 1: Payment Instructions
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(80, 7, "Payment Instructions:", 0, 1, 'L')
@@ -242,7 +244,6 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
                    0, 'L'
                    )
 
-    # Column 2: Bank Details (in a shaded box)
     pdf.set_xy(100, current_y)
     pdf.set_font('Arial', 'B', 10)
     pdf.set_fill_color(244, 244, 244)
@@ -264,8 +265,7 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     pdf.cell(40, 6, "SWIFT Code:", 'LB', 0, 'L')
     pdf.cell(60, 6, "NLCBTZXXXX", 'RB', 1, 'L')
 
-    # --- NEW DISCLAIMER BLOCK ---
-    pdf.set_y(-40)  # Position 4cm from bottom, above footer
+    pdf.set_y(-40)
     pdf.set_font('Arial', 'I', 8)
     pdf.set_text_color(128)
     pdf.multi_cell(0, 4,
@@ -278,15 +278,14 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 5, "Thank you for your business!", 0, 1, 'C')
-    # --- END OF NEW BLOCK ---
 
     return pdf.output(dest='S').encode('latin1')
 
 
-def generate_payment_receipt_pdf(ref, date, coop_name, total_tsh, commission_usd, status="unpaid"):
-    """Generates the Payment Receipt PDF using fpdf2."""
+def generate_payment_invoice_pdf(ref, date, coop_name, total_tsh, commission_usd, status="unpaid"):
+    """Generates the Payment invoice PDF using fpdf2."""
     pdf = PDF('P', 'mm', 'A4')
-    pdf.set_doc_details(coop_name, "RECEIPT", ref, date)
+    pdf.set_doc_details(coop_name, "invoice", ref, date)
     pdf.add_page()
     pdf.add_bill_to_section()
 
@@ -294,30 +293,38 @@ def generate_payment_receipt_pdf(ref, date, coop_name, total_tsh, commission_usd
     pdf.set_text_color(21, 87, 36)
     pdf.set_draw_color(212, 237, 218)
     pdf.set_font('Arial', '', 10)
-    pdf.multi_cell(0, 8, 'This receipt confirms fees associated with the processing of farmer payments.', 1, 'L',
+    pdf.multi_cell(0, 8, 'This invoice confirms fees associated with the processing of farmer payments.', 1, 'L',
                    fill=True)
     pdf.ln(5)
 
+    # --- UPDATED TABLE HEADERS ---
     pdf.set_font('Arial', 'B', 9)
     pdf.set_fill_color(244, 244, 244)
     pdf.set_text_color(0, 0, 0)
-    pdf.cell(130, 8, 'Description', 1, 0, 'L', fill=True)
-    pdf.cell(20, 8, 'Currency', 1, 0, 'C', fill=True)
+    pdf.cell(100, 8, 'Description', 1, 0, 'L', fill=True)
+    pdf.cell(50, 8, 'Calculation', 1, 0, 'R', fill=True)
     pdf.cell(40, 8, 'Amount', 1, 1, 'R', fill=True)
+    # --- END HEADER UPDATE ---
 
+    # --- UPDATED TABLE ROWS WITH CALCULATION ---
+    # Row 1: Total Payouts (No calculation, just a total)
     pdf.set_font('Arial', '', 10)
-    pdf.cell(130, 10, 'Total Farmer Payouts Processed', 1, 0, 'L')
-    pdf.cell(20, 10, 'TSH', 1, 0, 'C')
-    pdf.cell(40, 10, f'{total_tsh:,.2f}', 1, 1, 'R')
+    pdf.cell(100, 10, 'Total Farmer Payouts Processed', 1, 0, 'L')
+    pdf.cell(50, 10, '-', 1, 0, 'R')
+    pdf.cell(40, 10, f'TSH {total_tsh:,.2f}', 1, 1, 'R')
 
+    # Row 2: Commission Fee (With calculation)
     pdf.set_font('Arial', 'B', 10)
-    pdf.set_fill_color(232, 245, 233)
-    pdf.cell(130, 10, f'Payment Processing Fee ({PAYMENT_COMMISSION_RATE * 100}%)', 1, 0, 'L', fill=True)
-    pdf.cell(20, 10, 'USD', 1, 0, 'C', fill=True)
+    pdf.set_fill_color(232, 245, 233)  # Shaded row
+    pdf.cell(100, 10, f'Payment Processing Fee', 1, 0, 'L', fill=True)
+    pdf.set_font('Arial', '', 9)  # Smaller font for calculation
+    pdf.cell(50, 10, f'TSH {total_tsh:,.2f} @ {PAYMENT_COMMISSION_RATE * 100}%', 1, 0, 'R', fill=True)
+    pdf.set_font('Arial', 'B', 10)  # Bold for total
     pdf.cell(40, 10, f'${commission_usd:,.2f}', 1, 1, 'R', fill=True)
+    # --- END ROW UPDATE ---
+
     pdf.ln(10)
 
-    # --- NEW STATUS BLOCK & AMOUNT PAYABLE (mimicking service invoice) ---
     current_y = pdf.get_y()
     pdf.set_font('Arial', 'B', 14)
     if status == "paid":
@@ -343,12 +350,11 @@ def generate_payment_receipt_pdf(ref, date, coop_name, total_tsh, commission_usd
     pdf.set_draw_color(170, 170, 170)
     pdf.line(120, pdf.get_y(), 200, pdf.get_y())
 
-    # --- DISCLAIMER & THANK YOU (Adjusted Position) ---
-    pdf.set_y(pdf.get_y() + 15)  # Move down from the total
+    pdf.set_y(pdf.get_y() + 15)
     pdf.set_font('Arial', 'I', 8)
     pdf.set_text_color(128)
     pdf.multi_cell(0, 4,
-                   "This receipt is computer-generated and confirms the successful processing of commission fees for farmer payouts. "
+                   "This invoice is computer-generated and confirms the successful processing of commission fees for farmer payouts. "
                    "This document is not a tax invoice for the farmer payouts themselves. "
                    "All fees are final.",
                    0, 'C'
@@ -357,7 +363,6 @@ def generate_payment_receipt_pdf(ref, date, coop_name, total_tsh, commission_usd
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 5, "Thank you for your partnership!", 0, 1, 'C')
-    # --- END OF UPDATED ELEMENTS ---
 
     return pdf.output(dest='S').encode('latin1')
 
@@ -384,12 +389,12 @@ def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status):
     ]
 
 
-def create_receipt_modal_layout(ref, date, coop_name, total_tsh, commission_usd):
-    """Creates the Dash layout for the payment receipt modal."""
+def create_invoice_modal_layout(ref, date, coop_name, total_tsh, commission_usd):
+    """Creates the Dash layout for the payment invoice modal."""
     return [
-        dbc.ModalHeader(f"Download Receipt: {ref}"),
+        dbc.ModalHeader(f"Download invoice: {ref}"),
         dbc.ModalBody([
-            dbc.Alert(f"You are about to download the payment receipt for {coop_name}.", color="info"),
+            dbc.Alert(f"You are about to download the payment invoice for {coop_name}.", color="info"),
             html.Ul([
                 html.Li(f"Reference: {ref}"),
                 html.Li(f"Date: {date}"),
@@ -399,7 +404,7 @@ def create_receipt_modal_layout(ref, date, coop_name, total_tsh, commission_usd)
         ]),
         dbc.ModalFooter([
             dbc.Button("Close", id={'type': 'admin-download-modal-close', 'index': 2}, color="secondary"),
-            dbc.Button("Download Receipt (PDF)", id="download-pdf-button", color="primary")
+            dbc.Button("Download invoice (PDF)", id="download-pdf-button", color="primary")
         ])
     ]
 
@@ -587,6 +592,7 @@ def init_db():
                 status TEXT,
                 admin_notes TEXT,
                 cooperative_notes TEXT,
+                nbc_batch_number TEXT UNIQUE, 
                 FOREIGN KEY (cooperative_id) REFERENCES users (id)
             )
         ''')
@@ -594,6 +600,7 @@ def init_db():
             CREATE TABLE farmer_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 batch_id INTEGER,
+                client_ref TEXT UNIQUE,      
                 farmer_name TEXT NOT NULL,
                 bank_name TEXT NOT NULL,
                 account_number TEXT NOT NULL,
@@ -602,6 +609,7 @@ def init_db():
                 verification_status TEXT DEFAULT 'unverified', 
                 verification_reason TEXT,
                 failure_reason TEXT,
+                bankRef TEXT,                   
                 FOREIGN KEY (batch_id) REFERENCES submission_batches (id)
             )
         ''')
@@ -1458,27 +1466,48 @@ def submit_to_approver(n_clicks, table_data, submission_data_store, session_data
         return "Submission Rejected: Please correct all verification failures before submitting.", True, "danger", dash.no_update, dash.no_update
 
     try:
+        # --- THIS IS THE REPLACED BLOCK ---
         with get_db_connection() as conn:
             cursor = conn.cursor()
             record_count = len(df)
             total_amount = df['amount'].sum()
             submission_timestamp = datetime.now()
 
-            cursor.execute(
-                "INSERT INTO submission_batches (cooperative_id, filename, record_count, total_amount, submission_timestamp, status, cooperative_notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session_data['id'], display_filename, record_count, total_amount, submission_timestamp,
-                 'coop_submitted',
-                 coop_note))
-            batch_id = cursor.lastrowid
+            # --- START MODIFICATION ---
 
+            # 1. Generate the unique batch number for NBC
+            # Example: "CORECU-1699854321"
+            coop_short_name = session_data['cooperative_name'].split()[0].upper()
+            nbc_batch_number = f"{coop_short_name}-{int(submission_timestamp.timestamp())}"
+
+            # 2. Add nbc_batch_number to the INSERT statement
+            cursor.execute(
+                "INSERT INTO submission_batches (cooperative_id, filename, record_count, total_amount, submission_timestamp, status, cooperative_notes, nbc_batch_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_data['id'], display_filename, record_count, total_amount, submission_timestamp,
+                 'coop_submitted', coop_note, nbc_batch_number))
+
+            batch_id = cursor.lastrowid  # This is your local ID
+
+            # 3. Add client_ref to the farmer_payments DataFrame
+            # This creates a unique ref like "CP-12-1", "CP-12-2" etc.
+            df['client_ref'] = [f"CP-{batch_id}-{i}" for i in range(len(df))]
+
+            # 4. Update the list of columns to save to the DB
             df_to_db = df[
-                ['farmer_name', 'bank_name', 'account_number', 'amount', 'verification_status', 'verification_reason']]
+                ['client_ref', 'farmer_name', 'bank_name', 'account_number', 'amount', 'verification_status',
+                 'verification_reason']]
+
+            # --- END MODIFICATION ---
+
             df_to_db['batch_id'] = batch_id
             df_to_db.to_sql('farmer_payments', conn, if_exists='append', index=False)
 
             invoice_usd, invoice_ref = create_invoice(conn, batch_id, session_data['cooperative_name'], record_count,
                                                       submission_timestamp)
             conn.commit()
+
+            # --- END OF REPLACED BLOCK ---
+
             log_activity(session_data['id'], 'Data Submission (Verified)',
                          f"Submitted '{display_filename}'. Batch ID: {batch_id}. Invoice {invoice_ref}: ${invoice_usd:,.2f}.")
             msg = f"Successfully submitted {record_count} records. Invoice {invoice_ref} created for ${invoice_usd:,.2f}. Awaiting internal approver."
@@ -2301,7 +2330,7 @@ def render_payment_history(active_tab, ipn_data, trigger):
 
     # --- Add the new action columns ---
     df['action_service'] = "View Invoice"
-    df['action_commission'] = "View Receipt"
+    df['action_commission'] = "View invoice"
 
     df = df.rename(columns={
         'processing_timestamp_display': 'Date Processed',
@@ -2309,11 +2338,11 @@ def render_payment_history(active_tab, ipn_data, trigger):
         'filename': 'Filename',
         'record_count': 'Records',
         'action_service': 'Service Invoice',
-        'action_commission': 'Commission Receipt'
+        'action_commission': 'Commission invoice'
     })
 
     # --- Updated display columns ---
-    display_cols = ['Date Processed', 'Cooperative', 'Filename', 'Records', 'Service Invoice', 'Commission Receipt']
+    display_cols = ['Date Processed', 'Cooperative', 'Filename', 'Records', 'Service Invoice', 'Commission invoice']
 
     return dash_table.DataTable(
         id='payment-history-table',
@@ -2327,7 +2356,7 @@ def render_payment_history(active_tab, ipn_data, trigger):
         style_data_conditional=[
             {'if': {'column_id': 'Service Invoice'}, 'color': 'blue', 'textDecoration': 'underline',
              'cursor': 'pointer'},
-            {'if': {'column_id': 'Commission Receipt'}, 'color': 'green', 'textDecoration': 'underline',
+            {'if': {'column_id': 'Commission invoice'}, 'color': 'green', 'textDecoration': 'underline',
              'cursor': 'pointer'}
         ],
         filter_action="native",
@@ -2358,12 +2387,12 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
         col_id = active_cell['column_id']
         row_data = history_data[active_cell['row']]
 
-        # --- Logic for Commission Receipt ---
-        if col_id == 'Commission Receipt':
-            # We assume a receipt is "unpaid" until paid, or you can fetch its actual status
+        # --- Logic for Commission invoice ---
+        if col_id == 'Commission invoice':
+            # We assume a invoice is "unpaid" until paid, or you can fetch its actual status
             commission_status = row_data.get('payment_commission_status',
                                              'unpaid').lower()  # Assuming a new column for status
-            modal_content = create_receipt_modal_layout(
+            modal_content = create_invoice_modal_layout(
                 ref=row_data.get('payment_commission_reference', 'N/A'),
                 date=row_data['Date Processed'],
                 coop_name=row_data['Cooperative'],
@@ -2371,7 +2400,7 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 commission_usd=row_data.get('payment_commission_usd_raw', 0)
             )
             download_data = {
-                'type': 'payment_receipt',
+                'type': 'payment_invoice',
                 'ref': row_data.get('payment_commission_reference', 'N/A'),
                 'date': row_data['Date Processed'],
                 'coop_name': row_data['Cooperative'],
@@ -2428,8 +2457,8 @@ def download_pdf(n_clicks, download_data):
             status=download_data.get('status')
             # REMOVED: logos=ASSET_URLS
         )
-    elif doc_type == 'payment_receipt':
-        pdf_bytes = generate_payment_receipt_pdf(
+    elif doc_type == 'payment_invoice':
+        pdf_bytes = generate_payment_invoice_pdf(
             ref=download_data.get('ref'),
             date=download_data.get('date'),
             coop_name=download_data.get('coop_name'),
