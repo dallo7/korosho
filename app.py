@@ -381,7 +381,7 @@ def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status, veri
                 html.Li(f"Date: {date}"),
                 html.Li(f"Rows: {rows:,}"),
                 html.Li(f"Amount: ${amount:,.2f}"),
-                html.Li(f"Verification Attempts: {verification_count}"), # <-- ADDED
+                html.Li(f"Verification Attempts: {verification_count}"),  # <-- ADDED
                 html.Li(["Status: ", dbc.Badge(status.upper(), color=status_color)]),
             ])
         ]),
@@ -410,6 +410,7 @@ def create_payment_invoice_modal_layout(ref, date, coop_name, total_tsh, commiss
             dbc.Button("Download invoice (PDF)", id="download-pdf-button", color="primary")
         ])
     ]
+
 
 # Utility & DB Functions
 
@@ -884,10 +885,10 @@ def create_login_layout():
                     dbc.Button("Login", id="login-button", color="success", className="w-100 mb-2"),
                     dbc.Button("Back to Home", id="go-to-landing-button", color="link",
                                className="w-100 text-white mb-2"),
-                ], style={'backgroundColor': 'rgba(20, 20, 20, 0.8)', 'borderRadius': '0.3rem', 'padding': '2.5rem'})
-            ], className="shadow-lg border-0"),
-
-                # This sets the width to 50% (6/12) on medium and large screens.
+                ], style={'backgroundColor': 'rgba(20, 20, 20, 0.6)', 'borderRadius': '0.3rem', 'padding': '2.5rem'})
+            ], className="shadow-lg border-0",
+                style={'width': '150%', 'padding': '20px 50px', 'backgroundColor': 'rgba(0, 0, 0, 0.5)', 'zIndex': 8},
+            ),
                 width={'size': 10, 'sm': 8, 'md': 6, 'lg': 6}
 
             ), justify="center",
@@ -1621,8 +1622,8 @@ def handle_reverification(n_clicks, table_data, submission_data_store, file_labe
 def submit_to_approver(n_clicks, filter_mode, submission_data_store, session_data_obfuscated, coop_note,
                        verification_count):
     no_update_tuple = (
-    dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
-    dash.no_update)
+        dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+        dash.no_update)
     if not n_clicks or not submission_data_store:
         return no_update_tuple
 
@@ -2637,7 +2638,7 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
             return True, modal_content, download_data
 
         if col_id == 'Service Invoice':
-            verif_count = row_data.get('verification_count', 1) # <-- ADDED
+            verif_count = row_data.get('verification_count', 1)  # <-- ADDED
             modal_content = create_invoice_modal_layout(
                 ref=row_data.get('invoice_reference', 'N/A'),
                 date=row_data.get('submission_timestamp_display', 'N/A'),
@@ -2645,7 +2646,7 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 rows=row_data.get('row_count', 0),
                 amount=row_data.get('amount_usd_raw', 0),
                 status=row_data.get('status', 'unpaid').lower(),
-                verification_count=verif_count # <-- ADDED
+                verification_count=verif_count  # <-- ADDED
             )
             download_data = {
                 'type': 'service_invoice',
@@ -2655,7 +2656,7 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 'rows': row_data.get('row_count', 0),
                 'amount': row_data.get('amount_usd_raw', 0),
                 'status': row_data.get('status', 'unpaid').lower(),
-                'verification_count': verif_count # <-- ADDED
+                'verification_count': verif_count  # <-- ADDED
             }
             return True, modal_content, download_data
 
@@ -2683,7 +2684,7 @@ def download_pdf(n_clicks, download_data):
             rows=download_data.get('rows'),
             amount=download_data.get('amount'),
             status=download_data.get('status'),
-            verification_count=download_data.get('verification_count', 1) # <-- ADDED
+            verification_count=download_data.get('verification_count', 1)  # <-- ADDED
         )
     elif doc_type == 'payment_invoice':
         pdf_bytes = generate_payment_invoice_pdf(
@@ -2692,12 +2693,13 @@ def download_pdf(n_clicks, download_data):
             coop_name=download_data.get('coop_name'),
             total_tsh=download_data.get('total_tsh'),
             commission_usd=download_data.get('commission_usd'),
-            status=download_data.get('status', 'unpaid') # <-- ADDED
+            status=download_data.get('status', 'unpaid')  # <-- ADDED
         )
     else:
         raise dash.exceptions.PreventUpdate
 
     return dcc.send_bytes(pdf_bytes, f"{doc_ref}.pdf")
+
 
 @app.callback(Output("activity-logs-placeholder", "children"), Input("admin-tabs", "active_tab"),
               Input("ipn-data-store", "data"),
