@@ -1773,11 +1773,8 @@ def toggle_approver_details_modal(n_clicks, session_data_obfuscated):
 
     batch_id = int(eval(callback_context.triggered[0]['prop_id'].split('.')[0])['index'])
 
-    # --- Check context to avoid opening two modals at once ---
-    # If the user is an admin, they have their own modal ('details-modal').
-    # This modal ('approver-details-modal') is ONLY for the coop_approver.
     if session_data.get('role') == 'admin':
-        return False, None  # Admins use a different modal
+        return False, None
 
     with get_db_connection() as conn:
         df = pd.read_sql_query(
