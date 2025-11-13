@@ -178,28 +178,30 @@ class PDF(FPDF):
         self.ln(10)
 
 
-def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
+def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status, verification_count):
     """Generates the Verification Invoice PDF using fpdf2."""
     pdf = PDF('P', 'mm', 'A4')
     pdf.set_doc_details(coop_name, "INVOICE", ref, date)
     pdf.add_page()
     pdf.add_bill_to_section()
 
-    # --- UPDATED TABLE HEADERS ---
     pdf.set_font('Arial', 'B', 9)
     pdf.set_fill_color(244, 244, 244)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(100, 8, 'Description', 1, 0, 'L', fill=True)
     pdf.cell(50, 8, 'Calculation', 1, 0, 'R', fill=True)
     pdf.cell(40, 8, 'Amount (USD)', 1, 1, 'R', fill=True)
-    # --- END HEADER UPDATE ---
 
-    # --- UPDATED TABLE ROW WITH CALCULATION ---
+    # --- UPDATED CALCULATION CELL ---
     pdf.set_font('Arial', '', 10)
     pdf.cell(100, 10, 'Bank Account Verification Service', 1, 0, 'L')
-    pdf.set_font('Arial', '', 9)  # Use a slightly smaller font for the calculation
-    pdf.cell(50, 10, f'{rows:,} rows @ ${COST_PER_ROW_USD:,.2f} / row', 1, 0, 'R')
-    pdf.set_font('Arial', 'B', 10)  # Bold for the total
+    pdf.set_font('Arial', '', 9)
+
+    # Add the verification count text
+    count_text = f" (Verified {verification_count}x)" if verification_count > 1 else ""
+    pdf.cell(50, 10, f'{rows:,} rows @ ${COST_PER_ROW_USD:,.2f} / row{count_text}', 1, 0, 'R')
+
+    pdf.set_font('Arial', 'B', 10)
     pdf.cell(40, 10, f'${amount:,.2f}', 1, 1, 'R')
     # --- END ROW UPDATE ---
 
@@ -208,11 +210,11 @@ def generate_service_invoice_pdf(ref, date, coop_name, rows, amount, status):
     current_y = pdf.get_y()
     pdf.set_font('Arial', 'B', 14)
     if status == "paid":
-        pdf.set_fill_color(40, 167, 69)  # Green
+        pdf.set_fill_color(40, 167, 69)
         pdf.set_text_color(255, 255, 255)
         status_text = "PAID"
     else:
-        pdf.set_fill_color(255, 193, 7)  # Yellow
+        pdf.set_fill_color(255, 193, 7)
         pdf.set_text_color(51, 51, 51)
         status_text = "UNPAID"
     pdf.cell(40, 10, status_text, 0, 0, 'C', fill=True)
@@ -367,7 +369,7 @@ def generate_payment_invoice_pdf(ref, date, coop_name, total_tsh, commission_usd
     return pdf.output(dest='S').encode('latin1')
 
 
-def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status):
+def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status, verification_count):
     """Creates the Dash layout for the service invoice modal."""
     status_color = "success" if status == "paid" else "warning"
     return [
@@ -379,6 +381,7 @@ def create_invoice_modal_layout(ref, date, coop_name, rows, amount, status):
                 html.Li(f"Date: {date}"),
                 html.Li(f"Rows: {rows:,}"),
                 html.Li(f"Amount: ${amount:,.2f}"),
+                html.Li(f"Verification Attempts: {verification_count}"), # <-- ADDED
                 html.Li(["Status: ", dbc.Badge(status.upper(), color=status_color)]),
             ])
         ]),
@@ -513,7 +516,7 @@ def authenticate_user(username, password):
     return None
 
 
-def create_invoice(conn, batch_id, cooperative_name, row_count, timestamp):
+def create_invoice(conn, batch_id, cooperative_name, row_count, timestamp, verification_count):
     amount_usd = row_count * COST_PER_ROW_USD
     cursor = conn.cursor()
 
@@ -522,10 +525,13 @@ def create_invoice(conn, batch_id, cooperative_name, row_count, timestamp):
     next_id = cursor.fetchone()[0] + 1
     invoice_ref = f"{coop_short_name}-{next_id:04d}-{datetime.now().year}"
 
+    # --- UPDATED INSERT QUERY ---
     cursor.execute(
-        "INSERT INTO invoices (batch_id, cooperative_name, submission_timestamp, row_count, amount_usd, status, invoice_reference) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (batch_id, cooperative_name, timestamp, row_count, amount_usd, 'unpaid', invoice_ref)
+        "INSERT INTO invoices (batch_id, cooperative_name, submission_timestamp, row_count, amount_usd, status, invoice_reference, verification_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (batch_id, cooperative_name, timestamp, row_count, amount_usd, 'unpaid', invoice_ref, verification_count)
     )
+    # --- END OF UPDATE ---
+
     return amount_usd, invoice_ref
 
 
@@ -577,7 +583,11 @@ def init_db():
                 industry TEXT,
                 temp_password TEXT,
                 passphrase TEXT,
-                pin TEXT
+                pin TEXT,
+                full_name TEXT,
+                phone_number TEXT,
+                id_number TEXT,
+                amcos TEXT
             )
         ''')
         cursor.execute('''
@@ -612,6 +622,8 @@ def init_db():
                 FOREIGN KEY (batch_id) REFERENCES submission_batches (id)
             )
         ''')
+
+        # --- UPDATED INVOICES TABLE ---
         cursor.execute('''
             CREATE TABLE invoices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -625,9 +637,12 @@ def init_db():
                 invoice_reference TEXT,
                 payment_commission_usd REAL,
                 payment_commission_reference TEXT,
+                verification_count INTEGER, 
                 FOREIGN KEY (batch_id) REFERENCES submission_batches (id)
             )
         ''')
+        # --- END OF UPDATE ---
+
         cursor.execute('''
             CREATE TABLE payment_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -651,47 +666,26 @@ def init_db():
             )
         ''')
 
-        # --- Passwords and Auth ---
         admin_pass_unhashed = "admin123"
-        coop_pass_unhashed = "coop123"
         admin_password = hashlib.sha256(admin_pass_unhashed.encode()).hexdigest()
-        coop_password = hashlib.sha256(coop_pass_unhashed.encode()).hexdigest()
-
-        # --- Default Auth Credentials ---
         admin_passphrase_unhashed = "adminpass"
         admin_pin_unhashed = "987654"
-        coop_passphrase_unhashed = "cooppass"
-        coop_pin_unhashed = "123456"
-
         admin_passphrase = hashlib.sha256(admin_passphrase_unhashed.encode()).hexdigest()
         admin_pin = hashlib.sha256(admin_pin_unhashed.encode()).hexdigest()
-        coop_passphrase = hashlib.sha256(coop_passphrase_unhashed.encode()).hexdigest()
-        coop_pin = hashlib.sha256(coop_pin_unhashed.encode()).hexdigest()
 
         users_to_add = [
-            # (username, password, role, cooperative_name, industry, temp_password, passphrase, pin)
             ("admin", admin_password, "admin", "Farmers Payment Module Admin", "Administration", admin_pass_unhashed,
-             admin_passphrase, admin_pin),
-            ("corecu_data", coop_password, "coop_uploader", "CORECU Ltd", "Peas", coop_pass_unhashed, None, None),
+             admin_passphrase, admin_pin, "Administrator", None, None, None),
         ]
-
-        for union_name in COOPERATIVE_UNIONS:
-            approver_username = f"{union_name.split()[0].lower()}_finance"
-            default_product = "Peas" if union_name == 'CORECU Ltd' else "Administration"
-            users_to_add.append(
-                (approver_username, coop_password, "coop_approver", union_name, default_product, coop_pass_unhashed,
-                 coop_passphrase, coop_pin))
 
         cursor.execute("DELETE FROM users")
         for user in users_to_add:
             cursor.execute(
-                "INSERT INTO users (username, password, role, cooperative_name, industry, temp_password, passphrase, pin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (username, password, role, cooperative_name, industry, temp_password, passphrase, pin, full_name, phone_number, id_number, amcos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 user)
 
         conn.commit()
 
-
-# Layout Definitions
 
 def create_change_password_modal():
     return dbc.Modal([
@@ -767,11 +761,9 @@ def create_payment_auth_modal():
                         style={'display': 'none'},
                         children=[
                             dbc.Label("Step 2: Enter 6-Digit PIN"),
-                            # This is now just a display
                             dbc.Input(id="auth-pin-input", type="password", placeholder="PIN",
                                       maxLength=6, readonly=True, className="text-center fw-bold fs-4 mb-3",
                                       style={'letterSpacing': '0.5em'}),
-                            # The dialpad
                             create_pin_pad_layout(),
                             html.Div(id='auth-pin-alert', className="mt-2"),
                         ],
@@ -790,6 +782,7 @@ def create_payment_auth_modal():
         id="payment-auth-modal",
         is_open=False,
         backdrop="static",
+        zIndex=1060  # <-- THIS IS THE FIX (was z_index)
     )
 
 
@@ -943,7 +936,6 @@ def create_verification_layout(df, display_filename, coop_note="", reverify=Fals
                                  for c in ['farmer_name', 'account_number']
                              ]
 
-    # This creates the list (array) that Dash expects
     tooltip_data = [
         {
             column: {
@@ -956,12 +948,14 @@ def create_verification_layout(df, display_filename, coop_note="", reverify=Fals
     if reverify:
         alert_header = "Re-Verification Complete!"
         alert_color = "success" if failed_count == 0 else "warning"
-        alert_fail_text = f"Rejected Accounts (Needs Correction): {failed_count:,}. Please correct remaining errors."
+        alert_fail_text = f"Rejected Accounts: {failed_count:,}. Please correct errors or filter to 'Verified Accounts' to proceed."
         alert_fail_class = "mb-1 " + ("text-danger" if failed_count > 0 else "text-success")
+        if failed_count == 0:
+            alert_fail_text = "All accounts verified successfully."
     else:
         alert_header = "Verification Results (Immediate Check)"
         alert_color = "info"
-        alert_fail_text = f"Rejected Accounts (Needs Correction): {failed_count:,}. Edit the highlighted cells below and click 'Re-Verify' to fix."
+        alert_fail_text = f"Rejected Accounts: {failed_count:,}. Edit cells and 'Re-Verify', or filter to 'Verified Accounts' to submit."
         alert_fail_class = "mb-1 text-danger"
 
     return html.Div([
@@ -974,15 +968,31 @@ def create_verification_layout(df, display_filename, coop_note="", reverify=Fals
             ],
             color=alert_color, className="mt-3"
         ),
-        dbc.Button("Re-Verify After Correction", id={'type': 'reverify-btn', 'index': 1},
-                   color="warning", className="mb-3 me-2"),
+
+        # --- BUTTONS AND PLACEHOLDER ---
+        dbc.Row([
+            dbc.Col([
+                dbc.Button("Re-Verify After Correction", id={'type': 'reverify-btn', 'index': 1},
+                           color="warning", className="me-2"),
+            ], width="auto"),
+            dbc.Col([
+                dbc.ButtonGroup([
+                    dbc.Button("Show All", id="filter-all-btn", color="secondary", outline=True),
+                    dbc.Button("Show Failed Accounts", id="filter-failed-btn", color="danger", outline=True),
+                    dbc.Button("Show Verified Accounts", id="filter-verified-btn", color="success", outline=True)
+                ])
+            ], width="auto")
+        ], className="mb-3"),
+
         dbc.Label("Note to Approver (Optional)", html_for="coop-note-textarea"),
         dbc.Textarea(id='coop-note-textarea', value=coop_note,
                      placeholder="Add notes for the approver regarding this submission...",
                      className="mb-3"),
-        html.Div(dbc.Button("Finalize & Submit to Approver", id="submit-to-approver-button", color="success",
-                            disabled=(failed_count > 0)),
-                 className="d-flex justify-content-end mb-3"),
+
+        # This wrapper will be populated by the filter callback
+        html.Div(id='finalize-button-wrapper', className="d-flex justify-content-end mb-3"),
+        # --- END OF SECTION ---
+
         dash_table.DataTable(
             id='editable-datatable',
             data=df.to_dict('records'),
@@ -993,8 +1003,67 @@ def create_verification_layout(df, display_filename, coop_note="", reverify=Fals
             style_data_conditional=style_data_conditional,
             tooltip_data=tooltip_data,
             tooltip_duration=None,
-            export_format="csv",  # --- ADDED ---
+            export_format="csv",
         )
+    ])
+
+
+def create_preview_layout(df, display_filename):
+    """Helper function to create the initial data preview table."""
+
+    editable_cols = ['farmer_name', 'bank_name', 'account_number', 'amount']
+    df_preview = df[editable_cols]
+
+    table_columns = [
+        {'name': i.replace('_', ' ').title(), 'id': i, 'editable': True}
+        for i in df_preview.columns
+    ]
+
+    return html.Div([
+        html.H5(f"1. Preview & Correct: {display_filename}"),
+        dbc.Alert(
+            "Please review the data below. You can edit, add, or delete rows. Click 'Verify' when ready.",
+            color="info",
+            className="mt-3"
+        ),
+        dash_table.DataTable(
+            id='preview-datatable',
+            data=df_preview.to_dict('records'),
+            columns=table_columns,
+            page_size=10,
+            style_table={'overflowX': 'auto', 'marginTop': '10px'},
+
+            # --- UPDATED PROPERTIES ---
+            editable=True,
+            filter_action="native",
+            sort_action="native",
+            # 'row_addable=True' has been REMOVED
+            row_deletable=True,
+            column_selectable="multi",
+            export_format="csv",
+
+            style_data_conditional=[
+                {
+                    'if': {'row_index': 'odd'},
+                    'backgroundColor': 'rgb(248, 248, 248)'
+                }
+            ],
+            style_header={
+                'backgroundColor': 'rgb(230, 230, 230)',
+                'fontWeight': 'bold'
+            }
+            # --- END OF UPDATES ---
+        ),
+
+        # --- NEW BUTTON LAYOUT ---
+        html.Div(
+            [
+                dbc.Button("Add Row", id="add-row-button", color="secondary", outline=True, className="me-2"),
+                dbc.Button("Verify Data", id="verify-button", color="primary", size="lg"),
+            ],
+            className="d-flex justify-content-end my-3"
+        )
+        # --- END OF NEW LAYOUT ---
     ])
 
 
@@ -1009,8 +1078,9 @@ def create_cooperative_layout(session_data):
         dbc.Tab(label="📜 Submission History", tab_id="tab-coop-history", children=[
             dcc.Loading(type="default", children=html.Div(id="coop-history-placeholder", className="py-4"))
         ]),
-        dbc.Tab(label="📊 Analytics", tab_id="tab-coop-analytics", children=[
-            dcc.Loading(type="default", children=html.Div(id="coop-analytics-content", className="py-4"))
+
+        dbc.Tab(label="📄 Master Uploaded Sheet", tab_id="tab-coop-master-sheet", children=[
+            dcc.Loading(type="default", children=html.Div(id="coop-master-sheet-placeholder", className="py-4"))
         ]),
     ]
 
@@ -1036,7 +1106,7 @@ def create_cooperative_layout(session_data):
                          dcc.Upload(id='upload-data',
                                     children=html.Div(['Drag and Drop or ', html.A('Select a CSV/Excel File')]),
                                     style={'width': '100%', 'height': '60px', 'lineHeight': '60px',
-                                           'borderWidth': '1px',
+                                           'borderWidth': '1x',
                                            'borderStyle': 'dashed', 'borderRadius': '5px', 'textAlign': 'center',
                                            'margin': '10px 0'},
                                     multiple=False),
@@ -1053,7 +1123,11 @@ def create_cooperative_layout(session_data):
                      children=coop_tabs_children),
         ], fluid=True),
         dbc.Modal(id="coop-results-modal", size="xl", is_open=False),
-        dbc.Modal(id="approver-details-modal", size="xl", is_open=False),
+
+        # --- THIS IS THE FIX ---
+        dbc.Modal(id="approver-details-modal", size="xl", is_open=False, zIndex=1050, centered=True),
+        # --- END OF FIX ---
+
         create_change_password_modal(),
         create_payment_auth_modal(),
         dbc.Modal([dbc.ModalHeader("Processing Payment"), dbc.ModalBody(id="payment-animation-placeholder"),
@@ -1067,7 +1141,8 @@ def create_admin_user_management_layout(session_data, is_admin=False):
     coop_name = session_data.get('cooperative_name')
 
     with get_db_connection() as conn:
-        query = "SELECT id, username, role, cooperative_name, industry, temp_password FROM users WHERE role IN ('coop_uploader', 'coop_approver')"
+        # --- UPDATED QUERY ---
+        query = "SELECT id, username, role, cooperative_name, industry, temp_password, full_name, phone_number, id_number, amcos FROM users WHERE role IN ('coop_uploader', 'coop_approver')"
         params = []
         if not is_admin:
             query += " AND cooperative_name = ?"
@@ -1077,19 +1152,29 @@ def create_admin_user_management_layout(session_data, is_admin=False):
         df = pd.read_sql_query(query, conn, params=params)
 
     if df.empty:
-        df = pd.DataFrame(columns=['id', 'username', 'role', 'cooperative_name', 'industry', 'temp_password'])
+        # --- UPDATED COLUMNS ---
+        df = pd.DataFrame(
+            columns=['id', 'username', 'role', 'cooperative_name', 'industry', 'temp_password', 'full_name',
+                     'phone_number', 'id_number', 'amcos'])
 
+    # --- UPDATED RENAME ---
     df = df.rename(columns={
         'cooperative_name': 'Cooperative',
         'industry': 'Product',
         'username': 'Username',
         'role': 'Role',
-        'temp_password': 'Temporary Password'
+        'temp_password': 'Temporary Password',
+        'full_name': 'Full Name',
+        'phone_number': 'Phone Number',
+        'id_number': 'ID Number',
+        'amcos': 'AMCOS'
     })
 
     role_map = {'coop_uploader': 'Uploader', 'coop_approver': 'Approver (Finance)'}
     df['Role'] = df['Role'].map(role_map)
-    display_cols = ['Cooperative', 'Username', 'Role', 'Product', 'Temporary Password']
+    # --- UPDATED DISPLAY COLS ---
+    display_cols = ['Cooperative', 'Username', 'Full Name', 'Phone Number', 'ID Number', 'AMCOS', 'Role', 'Product',
+                    'Temporary Password']
 
     return html.Div([
         html.H4("Create Cooperative Users (Uploader / Approver)", className="mb-4"),
@@ -1122,6 +1207,22 @@ def create_admin_user_management_layout(session_data, is_admin=False):
                     dbc.Col(dbc.Input(id="new-user-password", placeholder="Password will be automatically generated",
                                       type="text", disabled=True, className="mb-3"), md=6),
                 ]),
+
+                # --- NEW FIELDS ADDED HERE ---
+                dbc.Row([
+                    dbc.Col(dbc.Input(id="new-user-name", placeholder="Full Name", type="text",
+                                      className="mb-3"), md=6),
+                    dbc.Col(dbc.Input(id="new-user-phone", placeholder="Phone Number (e.g., 07xxxxxxx)", type="text",
+                                      className="mb-3"), md=6),
+                ]),
+                dbc.Row([
+                    dbc.Col(dbc.Input(id="new-user-id-number", placeholder="ID Number (e.g., NIDA)", type="text",
+                                      className="mb-3"), md=6),
+                    dbc.Col(dbc.Input(id="new-user-amcos", placeholder="AMCOS (if applicable)", type="text",
+                                      className="mb-3"), md=6),
+                ]),
+                # --- END OF NEW FIELDS ---
+
                 dbc.Row([
                     dbc.Col(
                         dbc.Select(
@@ -1168,7 +1269,7 @@ def create_admin_user_management_layout(session_data, is_admin=False):
             ],
             filter_action="native",
             sort_action="native",
-            export_format="csv",  # --- ADDED ---
+            export_format="csv",
         ))
     ], className="py-4")
 
@@ -1233,11 +1334,14 @@ app.layout = html.Div([
     dcc.Store(id="batch-to-process"),
     dcc.Store(id='payment-authorization-store'),
     dcc.Store(id='ipn-data-store'),
+    dcc.Store(id='verification-count-store', data=0),
+    dcc.Store(id='raw-upload-data'),
     dcc.Store(id='show-login-page', data=False, storage_type='session'),
     dcc.Interval(id='payment-interval', interval=1500, n_intervals=0, disabled=True),
     dcc.Store(id='submission-trigger-store'),
     dcc.Store(id='uploader-verified-data'),
     dcc.Store(id='user-management-trigger'),
+    dcc.Store(id='datatable-filter-mode', data='all'),
     dcc.Store(id='current-download-data'),
     dcc.Download(id="download-pdf"),
     html.Div(id={'type': 'log-activity-trigger', 'coop_name': 'dummy', 'action': 'dummy'}, style={'display': 'none'},
@@ -1384,137 +1488,226 @@ def handle_password_change(n_clicks, new_pass, confirm_pass, new_passphrase, new
 
 @app.callback(
     Output("submission-table-placeholder", "children"),
-    Output("uploader-verified-data", "data"),
+    Output("raw-upload-data", "data"),
+    Output("coop-alert", "children", allow_duplicate=True),
+    Output("coop-alert", "is_open", allow_duplicate=True),
+    Output("coop-alert", "color", allow_duplicate=True),
     Input('upload-data', 'contents'),
     State('upload-data', 'filename'),
     State("file-label-input", "value"),
+    State('raw-upload-data', 'data'),
+    State('uploader-verified-data', 'data'),
     prevent_initial_call=True
 )
-def handle_uploader_upload(contents, filename, file_label):
-    if contents is None: return html.Div(), None
+def preview_uploaded_file(contents, filename, file_label, raw_data_store, verified_data_store):
+    if contents is None:
+        return dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
+
+    # --- NEW UPLOAD RULE ---
+    if raw_data_store or verified_data_store:
+        msg = "A file is already being processed. Please finalize and submit the current batch before uploading a new one."
+        return dash.no_update, dash.no_update, msg, True, "warning"
+    # --- END NEW UPLOAD RULE ---
+
     content_type, content_string = contents.split(',')
     decoded = base64.b64decode(content_string)
 
     try:
         df = pd.read_csv(io.StringIO(decoded.decode('utf-8'))) if 'csv' in filename else pd.read_excel(
             io.BytesIO(decoded))
+
         required_cols = {'farmer_name', 'bank_name', 'account_number', 'amount'}
-
         if not required_cols.issubset(df.columns):
-            return dbc.Alert(f"File is missing columns: {required_cols - set(df.columns)}", color="danger"), None
-
-        df = simulate_bank_verification(df.copy())
+            alert = dbc.Alert(f"File is missing required columns: {required_cols - set(df.columns)}", color="danger")
+            return alert, None, dash.no_update, False, dash.no_update
 
         label_prefix = f"{file_label} - " if file_label else ""
         display_filename = f"{label_prefix}{filename}"
 
-        output_children = create_verification_layout(df, display_filename, reverify=False)
-        return output_children, {'df': df.to_dict('records'), 'filename': filename,
-                                 'display_filename': display_filename}
+        output_children = create_preview_layout(df, display_filename)
+
+        raw_data_store = {
+            'df': df.to_dict('records'),
+            'filename': filename,
+            'display_filename': display_filename
+        }
+
+        return output_children, raw_data_store, dash.no_update, False, dash.no_update
 
     except Exception as e:
-        return dbc.Alert(f"Error processing file: {e}", color="danger"), None
+        alert = dbc.Alert(f"Error processing file: {e}", color="danger")
+        return alert, None, dash.no_update, False, dash.no_update
 
 
 @app.callback(
-    Output("submission-table-placeholder", "children", allow_duplicate=True),
+    Output('submission-table-placeholder', 'children', allow_duplicate=True),
+    Input('uploader-verified-data', 'data'),
+    prevent_initial_call=True
+)
+def create_verification_layout_callback(verified_data):
+    if not verified_data:
+        # This handles clearing the layout after submission
+        return html.Div()
+
+    df = pd.DataFrame(verified_data.get('df'))
+    display_filename = verified_data.get('display_filename', 'uploaded_file')
+
+    # Create the layout. 'reverify=False' shows the initial "Verification Results" alert.
+    return create_verification_layout(df, display_filename, coop_note="", reverify=False)
+
+
+@app.callback(
     Output("uploader-verified-data", "data", allow_duplicate=True),
+    Output("datatable-filter-mode", "data", allow_duplicate=True),
+    Output('submission-table-placeholder', 'children', allow_duplicate=True),
+    Output('verification-count-store', 'data', allow_duplicate=True),  # <-- ADDED
+    Output("coop-alert", "children", allow_duplicate=True),  # <-- ADDED
+    Output("coop-alert", "is_open", allow_duplicate=True),  # <-- ADDED
+    Output("coop-alert", "color", allow_duplicate=True),  # <-- ADDED
     Input({'type': 'reverify-btn', 'index': ALL}, 'n_clicks'),
     State("editable-datatable", "data"),
     State("uploader-verified-data", "data"),
-    State("coop-note-textarea", "value"),
     State("file-label-input", "value"),
+    State("coop-note-textarea", "value"),
+    State('verification-count-store', 'data'),  # <-- ADDED
     prevent_initial_call=True
 )
-def handle_reverification(n_clicks, table_data, submission_data_store, coop_note, file_label):
+def handle_reverification(n_clicks, table_data, submission_data_store, file_label, coop_note, current_count):
     if not any(n_clicks) or not table_data:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, False, dash.no_update
 
     df_corrected = pd.DataFrame(table_data)
-    filename = submission_data_store.get('filename', 'uploaded_file')
 
+    # --- RULE 2 CHECK ---
+    if submission_data_store:
+        df_original = pd.DataFrame(submission_data_store.get('df'))
+        # Compare only the editable columns
+        cols_to_compare = ['farmer_name', 'bank_name', 'account_number', 'amount']
+        if df_corrected[cols_to_compare].equals(df_original[cols_to_compare]):
+            msg = "No changes detected. Please edit the failed rows before re-verifying."
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, msg, True, "warning"
+    # --- END RULE 2 CHECK ---
+
+    filename = submission_data_store.get('filename', 'uploaded_file')
     label_prefix = f"{file_label} - " if file_label else ""
     display_filename = f"{label_prefix}{filename}"
 
     df_reverified = simulate_bank_verification(df_corrected.copy())
-    output_children = create_verification_layout(df_reverified, display_filename, coop_note, reverify=True)
-    return output_children, {'df': df_reverified.to_dict('records'), 'filename': filename,
-                             'display_filename': display_filename}
+    new_layout = create_verification_layout(df_reverified, display_filename, coop_note, reverify=True)
+
+    new_count = (current_count or 0) + 1
+
+    return {'df': df_reverified.to_dict('records'), 'filename': filename,
+            'display_filename': display_filename}, 'all', new_layout, new_count, dash.no_update, False, dash.no_update
 
 
 @app.callback(
-    Output("coop-alert", "children"), Output("coop-alert", "is_open"), Output("coop-alert", "color"),
+    Output("coop-alert", "children"),
+    Output("coop-alert", "is_open"),
+    Output("coop-alert", "color"),
     Output("submission-table-placeholder", "children", allow_duplicate=True),
     Output("submission-trigger-store", "data", allow_duplicate=True),
+    Output("raw-upload-data", "data", allow_duplicate=True),
+    Output("uploader-verified-data", "data", allow_duplicate=True),
+    Output('verification-count-store', 'data', allow_duplicate=True),  # <-- ADDED
     Input("submit-to-approver-button", "n_clicks"),
-    State("editable-datatable", "data"), State("uploader-verified-data", "data"), State("user-session", "data"),
+    State("datatable-filter-mode", "data"),
+    State("uploader-verified-data", "data"),  # <-- THIS IS THE FIX
+    State("user-session", "data"),
     State("coop-note-textarea", "value"),
+    State('verification-count-store', 'data'),  # <-- ADDED
     prevent_initial_call=True
 )
-def submit_to_approver(n_clicks, table_data, submission_data_store, session_data_obfuscated, coop_note):
-    if not n_clicks or not table_data: return "", False, "", dash.no_update, dash.no_update
+def submit_to_approver(n_clicks, filter_mode, submission_data_store, session_data_obfuscated, coop_note,
+                       verification_count):
+    no_update_tuple = (
+    dash.no_update, False, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+    dash.no_update)
+    if not n_clicks or not submission_data_store:
+        return no_update_tuple
+
     session_data = deserialize_session(session_data_obfuscated)
     if session_data['role'] != 'coop_uploader':
-        return "Access Denied.", True, "danger", dash.no_update, dash.no_update
+        return "Access Denied.", True, "danger", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
-    df = pd.DataFrame(table_data)
-    # Get the CONCATENATED name from the store
+    df_full = pd.DataFrame(submission_data_store.get('df'))
     display_filename = submission_data_store.get('display_filename', 'uploaded_file')
 
-    if (df['verification_status'] == 'failed').any():
-        return "Submission Rejected: Please correct all verification failures before submitting.", True, "danger", dash.no_update, dash.no_update
+    df_to_submit = df_full[df_full['verification_status'] == 'verified'].copy()
+
+    if df_to_submit.empty:
+        return "No verified accounts to submit.", True, "warning", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     try:
-        # --- THIS IS THE REPLACED BLOCK ---
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            record_count = len(df)
-            total_amount = df['amount'].sum()
+            record_count = len(df_to_submit)
+            total_amount = df_to_submit['amount'].sum()
             submission_timestamp = datetime.now()
 
-            # --- START MODIFICATION ---
+            timestamp_str = submission_timestamp.strftime("%Y%m%d-%H%M%S")
+            final_filename = f"{display_filename}_{timestamp_str}"
 
-            # 1. Generate the unique batch number for NBC
-            # Example: "CORECU-1699854321"
             coop_short_name = session_data['cooperative_name'].split()[0].upper()
             nbc_batch_number = f"{coop_short_name}-{int(submission_timestamp.timestamp())}"
 
-            # 2. Add nbc_batch_number to the INSERT statement
             cursor.execute(
                 "INSERT INTO submission_batches (cooperative_id, filename, record_count, total_amount, submission_timestamp, status, cooperative_notes, nbc_batch_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (session_data['id'], display_filename, record_count, total_amount, submission_timestamp,
+                (session_data['id'], final_filename, record_count, total_amount, submission_timestamp,
                  'coop_submitted', coop_note, nbc_batch_number))
 
-            batch_id = cursor.lastrowid  # This is your local ID
+            batch_id = cursor.lastrowid
 
-            # 3. Add client_ref to the farmer_payments DataFrame
-            # This creates a unique ref like "CP-12-1", "CP-12-2" etc.
-            df['client_ref'] = [f"CP-{batch_id}-{i}" for i in range(len(df))]
-
-            # 4. Update the list of columns to save to the DB
-            df_to_db = df[
+            df_to_submit['client_ref'] = [f"CP-{batch_id}-{i}" for i in range(len(df_to_submit))]
+            df_to_db = df_to_submit[
                 ['client_ref', 'farmer_name', 'bank_name', 'account_number', 'amount', 'verification_status',
                  'verification_reason']]
-
-            # --- END MODIFICATION ---
 
             df_to_db['batch_id'] = batch_id
             df_to_db.to_sql('farmer_payments', conn, if_exists='append', index=False)
 
+            # --- PASS VERIFICATION COUNT TO INVOICE ---
+            verif_count = verification_count or 1  # Default to 1 if something went wrong
             invoice_usd, invoice_ref = create_invoice(conn, batch_id, session_data['cooperative_name'], record_count,
-                                                      submission_timestamp)
+                                                      submission_timestamp, verif_count)
             conn.commit()
 
-            # --- END OF REPLACED BLOCK ---
-
             log_activity(session_data['id'], 'Data Submission (Verified)',
-                         f"Submitted '{display_filename}'. Batch ID: {batch_id}. Invoice {invoice_ref}: ${invoice_usd:,.2f}.")
+                         f"Submitted '{final_filename}'. Batch ID: {batch_id}. Invoice {invoice_ref}: ${invoice_usd:,.2f}.")
             msg = f"Successfully submitted {record_count} records. Invoice {invoice_ref} created for ${invoice_usd:,.2f}. Awaiting internal approver."
-        return msg, True, "success", dash.no_update, datetime.now().isoformat()
+
+        # Clear stores and reset count to 0
+        return msg, True, "success", html.Div(), datetime.now().isoformat(), None, None, 0
 
     except Exception as e:
         msg, color = f"Database error: {e}", "danger"
-    return msg, True, color, dash.no_update, dash.no_update
+    return msg, True, color, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+
+@app.callback(
+    Output("uploader-verified-data", "data"),
+    Output('verification-count-store', 'data', allow_duplicate=True),  # <-- ADDED
+    Input('verify-button', 'n_clicks'),
+    State('preview-datatable', 'data'),
+    State("raw-upload-data", "data"),
+    prevent_initial_call=True
+)
+def handle_verification(n_clicks, table_data, raw_data_store):
+    if not n_clicks or not table_data:
+        raise dash.exceptions.PreventUpdate
+
+    df_corrected = pd.DataFrame(table_data)
+    display_filename = raw_data_store.get('display_filename', 'uploaded_file')
+
+    df_reverified = simulate_bank_verification(df_corrected.copy())
+
+    verified_data_store = {
+        'df': df_reverified.to_dict('records'),
+        'filename': raw_data_store.get('filename'),
+        'display_filename': display_filename
+    }
+
+    return verified_data_store, 1  # <-- Set verification count to 1
 
 
 @app.callback(
@@ -2157,6 +2350,45 @@ def render_admin_user_management_tab(active_tab, trigger, session_data_obfuscate
 
 
 @app.callback(
+    Output('editable-datatable', 'data'),
+    Output('finalize-button-wrapper', 'children'),
+    Output('datatable-filter-mode', 'data'),
+    Input('filter-all-btn', 'n_clicks'),
+    Input('filter-failed-btn', 'n_clicks'),
+    Input('filter-verified-btn', 'n_clicks'),
+    State('uploader-verified-data', 'data'),  # Just read the data
+    prevent_initial_call=True
+)
+def filter_table_and_toggle_button(all_clicks, failed_clicks, verified_clicks, verified_data):
+    if not verified_data:
+        raise dash.exceptions.PreventUpdate
+
+    ctx = callback_context
+    triggered_id = ctx.triggered_id.split('.')[0]
+
+    df = pd.DataFrame(verified_data.get('df'))
+
+    # Default is 'all'
+    filtered_df = df
+    finalize_button = html.Div()  # Empty
+    filter_mode = 'all'
+
+    if triggered_id == 'filter-verified-btn':
+        filtered_df = df[df['verification_status'] == 'verified']
+        filter_mode = 'verified'
+        # Show the finalize button ONLY when 'Verified' is clicked
+        finalize_button = dbc.Button("Finalize & Submit to Approver", id="submit-to-approver-button", color="success")
+
+    elif triggered_id == 'filter-failed-btn':
+        filtered_df = df[df['verification_status'] == 'failed']
+        filter_mode = 'failed'
+
+    # 'filter-all-btn' will just use the defaults
+
+    return filtered_df.to_dict('records'), finalize_button, filter_mode
+
+
+@app.callback(
     Output("admin-create-user-alert", "children"),
     Output("admin-create-user-alert", "is_open"),
     Output("admin-create-user-alert", "color"),
@@ -2166,30 +2398,31 @@ def render_admin_user_management_tab(active_tab, trigger, session_data_obfuscate
     Output("new-user-role", "value"),
     Output("new-user-product", "value"),
     Output("user-management-trigger", "data"),
+    # --- ADDED STATES FOR NEW FIELDS ---
     Input("admin-create-user-button", "n_clicks"),
     State("new-user-username", "value"),
     State("new-user-coop-name", "value"),
     State("new-user-role", "value"),
     State("new-user-product", "value"),
-    State("user-session", "data"),  # This state provides the obfuscated data
+    State("new-user-name", "value"),
+    State("new-user-phone", "value"),
+    State("new-user-id-number", "value"),
+    State("new-user-amcos", "value"),
+    State("user-session", "data"),
     prevent_initial_call=True
 )
-def create_coop_user(n_clicks, username, coop_name, role, product, session_data_obfuscated):  # Renamed argument
+def create_coop_user(n_clicks, username, coop_name, role, product, full_name, phone_number, id_number, amcos,
+                     session_data_obfuscated):
     no_update_9 = (
         dash.no_update, False, "", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
         dash.no_update)
     if not n_clicks:
         return no_update_9
 
-    # --- THIS IS THE FIX ---
-    # Deserialize the session data first
     session_data = deserialize_session(session_data_obfuscated)
-
-    # Now this check will work
     if not session_data or session_data.get('role') not in ('admin', 'coop_approver'):
         return dbc.Alert("Access Denied.",
                          color="danger"), True, "danger", dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-    # --- END OF FIX ---
 
     if not all([username, coop_name, role]):
         return dbc.Alert("Username, Cooperative, and Role are required.",
@@ -2215,12 +2448,16 @@ def create_coop_user(n_clicks, username, coop_name, role, product, session_data_
                 new_passphrase_hash = hashlib.sha256("cooppass".encode()).hexdigest()
                 new_pin_hash = hashlib.sha256("123456".encode()).hexdigest()
 
+            # --- UPDATED TUPLE AND QUERY ---
             new_user = (
                 username, hashed_password, role, coop_name, user_product, temp_password, new_passphrase_hash,
-                new_pin_hash)
+                new_pin_hash, full_name, phone_number, id_number, amcos)  # Added new fields
             cursor.execute(
-                "INSERT INTO users (username, password, role, cooperative_name, industry, temp_password, passphrase, pin) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (username, password, role, cooperative_name, industry, temp_password, passphrase, pin, full_name, phone_number, id_number, amcos) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                # Added new columns
                 new_user)
+            # --- END OF UPDATE ---
+
             conn.commit()
             log_activity(session_data['id'], 'User Created',
                          f"Created new '{role}' user: {username} for {coop_name}. Initial Password: {temp_password}")
@@ -2305,13 +2542,12 @@ def render_master_data_table(active_tab, ipn_data, trigger):
 def render_payment_history(active_tab, ipn_data, trigger):
     if active_tab != "tab-history": return dash.no_update
     with get_db_connection() as conn:
-        # --- UPDATED SQL QUERY ---
-        # Fetches data for both service and commission invoices
         query = """
             SELECT 
                 p.processing_timestamp, p.cooperative_name, p.filename, p.record_count, p.total_amount, 
                 i.payment_commission_usd, i.payment_commission_reference,
-                i.invoice_reference, i.submission_timestamp, i.row_count, i.amount_usd, i.status
+                i.invoice_reference, i.submission_timestamp, i.row_count, i.amount_usd, i.status,
+                i.verification_count  -- <-- ADDED
             FROM payment_history p 
             LEFT JOIN invoices i ON p.batch_id = i.batch_id 
             ORDER BY p.processing_timestamp DESC
@@ -2320,14 +2556,13 @@ def render_payment_history(active_tab, ipn_data, trigger):
 
     if df.empty: return dbc.Alert("No processed payments found in history.", color="secondary")
 
-    # --- Store all raw data needed for modals ---
     df['processing_timestamp_display'] = pd.to_datetime(df['processing_timestamp']).dt.strftime('%Y-%m-%d %I:%M %p')
     df['submission_timestamp_display'] = pd.to_datetime(df['submission_timestamp']).dt.strftime('%Y-%m-%d %I:%M %p')
     df['total_amount_raw'] = df['total_amount']
     df['payment_commission_usd_raw'] = df['payment_commission_usd']
     df['amount_usd_raw'] = df['amount_usd']
+    df['verification_count'] = df['verification_count'].fillna(1)  # Default for old invoices
 
-    # --- Add the new action columns ---
     df['action_service'] = "View Invoice"
     df['action_commission'] = "View invoice"
 
@@ -2340,7 +2575,6 @@ def render_payment_history(active_tab, ipn_data, trigger):
         'action_commission': 'Commission invoice'
     })
 
-    # --- Updated display columns ---
     display_cols = ['Date Processed', 'Cooperative', 'Filename', 'Records', 'Service Invoice', 'Commission invoice']
 
     return dash_table.DataTable(
@@ -2351,7 +2585,6 @@ def render_payment_history(active_tab, ipn_data, trigger):
         style_table={'overflowX': 'auto'},
         style_header={'backgroundColor': '#2c3e50', 'color': 'white', 'fontWeight': 'bold'},
         style_cell={'textAlign': 'left', 'whiteSpace': 'normal', 'height': 'auto'},
-        # --- Updated styles to make new columns clickable ---
         style_data_conditional=[
             {'if': {'column_id': 'Service Invoice'}, 'color': 'blue', 'textDecoration': 'underline',
              'cursor': 'pointer'},
@@ -2386,13 +2619,8 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
         col_id = active_cell['column_id']
         row_data = history_data[active_cell['row']]
 
-        # --- Logic for Commission invoice ---
         if col_id == 'Commission invoice':
-            commission_status = row_data.get('payment_commission_status',
-                                             'unpaid').lower()
-
-            # --- THIS IS THE FIX ---
-            # Call the new function name
+            commission_status = row_data.get('payment_commission_status', 'unpaid').lower()
             modal_content = create_payment_invoice_modal_layout(
                 ref=row_data.get('payment_commission_reference', 'N/A'),
                 date=row_data['Date Processed'],
@@ -2400,8 +2628,6 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 total_tsh=row_data.get('total_amount_raw', 0),
                 commission_usd=row_data.get('payment_commission_usd_raw', 0)
             )
-            # --- END OF FIX ---
-
             download_data = {
                 'type': 'payment_invoice',
                 'ref': row_data.get('payment_commission_reference', 'N/A'),
@@ -2413,15 +2639,16 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
             }
             return True, modal_content, download_data
 
-        # --- Logic for Service Invoice (this part was already correct) ---
         if col_id == 'Service Invoice':
+            verif_count = row_data.get('verification_count', 1) # <-- ADDED
             modal_content = create_invoice_modal_layout(
                 ref=row_data.get('invoice_reference', 'N/A'),
                 date=row_data.get('submission_timestamp_display', 'N/A'),
                 coop_name=row_data['Cooperative'],
                 rows=row_data.get('row_count', 0),
                 amount=row_data.get('amount_usd_raw', 0),
-                status=row_data.get('status', 'unpaid').lower()
+                status=row_data.get('status', 'unpaid').lower(),
+                verification_count=verif_count # <-- ADDED
             )
             download_data = {
                 'type': 'service_invoice',
@@ -2430,7 +2657,8 @@ def toggle_admin_download_modal(active_cell, close_clicks, history_data, is_open
                 'coop_name': row_data['Cooperative'],
                 'rows': row_data.get('row_count', 0),
                 'amount': row_data.get('amount_usd_raw', 0),
-                'status': row_data.get('status', 'unpaid').lower()
+                'status': row_data.get('status', 'unpaid').lower(),
+                'verification_count': verif_count # <-- ADDED
             }
             return True, modal_content, download_data
 
@@ -2457,8 +2685,8 @@ def download_pdf(n_clicks, download_data):
             coop_name=download_data.get('coop_name'),
             rows=download_data.get('rows'),
             amount=download_data.get('amount'),
-            status=download_data.get('status')
-            # REMOVED: logos=ASSET_URLS
+            status=download_data.get('status'),
+            verification_count=download_data.get('verification_count', 1) # <-- ADDED
         )
     elif doc_type == 'payment_invoice':
         pdf_bytes = generate_payment_invoice_pdf(
@@ -2466,14 +2694,13 @@ def download_pdf(n_clicks, download_data):
             date=download_data.get('date'),
             coop_name=download_data.get('coop_name'),
             total_tsh=download_data.get('total_tsh'),
-            commission_usd=download_data.get('commission_usd')
-            # REMOVED: logos=ASSET_URLS
+            commission_usd=download_data.get('commission_usd'),
+            status=download_data.get('status', 'unpaid') # <-- ADDED
         )
     else:
         raise dash.exceptions.PreventUpdate
 
     return dcc.send_bytes(pdf_bytes, f"{doc_ref}.pdf")
-
 
 @app.callback(Output("activity-logs-placeholder", "children"), Input("admin-tabs", "active_tab"),
               Input("ipn-data-store", "data"),
@@ -2519,42 +2746,77 @@ def render_analytics_tab(active_tab, ipn_data):
                               dbc.Col(dcc.Graph(figure=fig_coop_value), md=6)])])
 
 
-@app.callback(Output("coop-analytics-content", "children"), Input("coop-tabs", "active_tab"),
-              Input("user-session", "data"), Input("coop-alert", "is_open"))
-def render_cooperative_analytics(active_tab, session_data_obfuscated, alert_is_open):
-    if active_tab != "tab-coop-analytics": return dash.no_update
+@app.callback(
+    Output("coop-master-sheet-placeholder", "children"),
+    Input("coop-tabs", "active_tab"),
+    Input("user-session", "data"),
+    Input("submission-trigger-store", "data")  # Refresh when a submission happens
+)
+def render_coop_master_sheet(active_tab, session_data_obfuscated, submission_trigger):
+    if active_tab != "tab-coop-master-sheet":
+        return dash.no_update
+
     session_data = deserialize_session(session_data_obfuscated)
-    if not session_data or session_data.get("role") not in ["coop_uploader", "coop_approver"]: return None
+    if not session_data or session_data.get("role") not in ["coop_uploader", "coop_approver"]:
+        return None
+
     coop_name = session_data.get('cooperative_name')
+
     with get_db_connection() as conn:
-        query = """SELECT b.submission_timestamp, p.farmer_name, p.bank_name, p.amount, p.status, p.verification_status FROM farmer_payments AS p JOIN submission_batches AS b ON p.batch_id = b.id JOIN users AS u ON b.cooperative_id = u.id WHERE u.cooperative_name = ?"""
+        query = """
+            SELECT
+                b.id,
+                b.filename,
+                b.submission_timestamp,
+                b.status,
+                b.record_count AS total_rows,
+                SUM(CASE WHEN p.status = 'paid' THEN 1 ELSE 0 END) AS passed,
+                SUM(CASE WHEN p.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN p.status = 'pending' THEN 1 ELSE 0 END) AS pending
+            FROM submission_batches b
+            JOIN users u ON b.cooperative_id = u.id
+            LEFT JOIN farmer_payments p ON b.id = p.batch_id
+            WHERE u.cooperative_name = ?
+            GROUP BY b.id, b.filename, b.submission_timestamp, b.status, b.record_count
+            ORDER BY b.submission_timestamp DESC
+        """
         df = pd.read_sql_query(query, conn, params=(coop_name,))
 
-    if df.empty: return dbc.Alert("No data available to generate analytics.", color="info")
-    df['date'] = pd.to_datetime(df['submission_timestamp']).dt.date
-    total_submitted_count = len(df)
-    failed_verification_count = len(df[df['verification_status'] == 'failed'])
-    df_paid = df[df['status'] == 'paid'].copy()
-    total_submitted_amount = df['amount'].sum()
-    total_paid_amount = df_paid['amount'].sum()
-    total_farmers_paid = df_paid['farmer_name'].count()
-    success_rate = (total_farmers_paid / total_submitted_count) * 100 if total_submitted_count > 0 else 0
-    kpi_cards = dbc.Row([dbc.Col(dbc.Card(dbc.CardBody(
-        [html.H4(f"TSH {total_submitted_amount:,.2f}"), html.P("Total Submitted Value", className="text-muted")])),
-        md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H4(f"TSH {total_paid_amount:,.2f}"),
-                                       html.P("Total Amount Paid", className="text-muted")])), md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H4(f"{failed_verification_count:,}"),
-                                       html.P("Verification Failures", className="text-danger")])),
-                md=3),
-        dbc.Col(dbc.Card(dbc.CardBody([html.H4(f"{success_rate:.2f}%"),
-                                       html.P("Payment Success Rate", className="text-muted")])),
-                md=3)])
-    status_counts = df['status'].value_counts().reset_index()
-    status_counts.columns = ['status', 'count']
-    fig_status = px.pie(status_counts, names='status', values='count', title='Payment Status Distribution',
-                        color='status', color_discrete_map={'paid': 'green', 'failed': 'red', 'pending': 'orange'})
-    return html.Div([kpi_cards, html.Hr(), dbc.Row([dbc.Col(dcc.Graph(figure=fig_status), md=6)])])
+    if df.empty:
+        return dbc.Alert("No data found for this cooperative.", color="info")
+
+    # Format data for display
+    df['submission_timestamp'] = pd.to_datetime(df['submission_timestamp']).dt.strftime('%Y-%m-%d %I:%M %p')
+
+    df = df.rename(columns={
+        'filename': 'Filename',
+        'submission_timestamp': 'Upload Time',
+        'status': 'Batch Status',
+        'total_rows': 'Total Rows',
+        'passed': 'Paid',
+        'failed': 'Failed',
+        'pending': 'Pending'
+    })
+
+    display_cols = ['Filename', 'Upload Time', 'Batch Status', 'Total Rows', 'Paid', 'Failed', 'Pending']
+
+    return dash_table.DataTable(
+        data=df.to_dict('records'),
+        columns=[{'name': i, 'id': i} for i in display_cols],
+        page_size=15,
+        style_table={'overflowX': 'auto'},
+        style_header={'backgroundColor': '#2c3e50', 'color': 'white', 'fontWeight': 'bold'},
+        style_cell={'textAlign': 'left', 'whiteSpace': 'normal', 'height': 'auto'},
+        style_data_conditional=[
+            {'if': {'filter_query': '{Failed} > 0'}, 'backgroundColor': '#f8d7da', 'color': '#721c24'},
+            {'if': {'filter_query': '{Batch Status} = "processed"'}, 'backgroundColor': '#d4edda', 'color': '#155724'},
+            {'if': {'filter_query': '{Batch Status} = "coop_submitted"'}, 'backgroundColor': '#fff3cd',
+             'color': '#856404'}
+        ],
+        filter_action="native",
+        sort_action="native",
+        export_format="csv",
+    )
 
 
 @app.callback(Output("coop-activity-logs-placeholder", "children"), Input("coop-tabs", "active_tab"),
@@ -2572,6 +2834,20 @@ def render_coop_activity_logs(active_tab, session_data_obfuscated, submission_tr
         "tab-coop-logs",
         params=(coop_name,)
     )
+
+
+@app.callback(
+    Output('preview-datatable', 'data', allow_duplicate=True),
+    Input('add-row-button', 'n_clicks'),
+    State('preview-datatable', 'data'),
+    State('preview-datatable', 'columns'),
+    prevent_initial_call=True
+)
+def add_preview_row(n_clicks, rows, columns):
+    if n_clicks:
+        new_row = {c['id']: '' for c in columns if c['id'] not in ['id']}
+        rows.append(new_row)
+    return rows
 
 
 @app.callback(
@@ -2785,11 +3061,11 @@ def show_password_change_toast(session_data_obfuscated, trigger_data):
 
 
 if __name__ == "__main__":
-    init_db()
+    # init_db()
     print("--- Farmers Payment Module Initialized ---")
     print(f"Admin: admin / admin123 | Approver: corecu_finance / coop123")
     print("---")
     print("Default Approver (corecu_finance) Auth Credentials:")
     print("Passphrase: cooppass")
     print("PIN: 123456")
-    app.run(debug=True, port=8659)
+    app.run(debug=True, port=8889)
