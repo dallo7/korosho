@@ -9,6 +9,7 @@ openpyxl==3.1.5
 attrs==25.3.0
 azure-core==1.33.0
 azure-eventhub==5.14.0
+qrcode==8.2.1
 blinker==1.9.0
 brotli==1.2.0
 certifi==2025.1.31
@@ -94,6 +95,7 @@ zipp==3.21.0
 zope.event==5.0
 zope.interface==7.2
 zopfli==0.4.0
+
 
 
 
